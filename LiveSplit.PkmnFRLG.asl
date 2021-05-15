@@ -1,3 +1,4 @@
+//Xargoth/efoerster it's NLM. Contact me via Discord so that we can talk (can't seem to reach you there)
 state("mGBA") {
     uint wramAddr: 0x0268D088, 0x20, 0x58, 0x8, 0x28;
 }
