@@ -1,6 +1,4 @@
-state("mGBA") {
-    uint wramAddr: 0x0268D088, 0x20, 0x58, 0x8, 0x28;
-}
+state("mGBA") {}
 
 startup {
     settings.Add("battles", true, "Battles");
@@ -35,6 +33,25 @@ startup {
         vars.splits = vars.GetSplitList();
     });
     timer.OnStart += vars.timer_OnStart;
+
+    vars.FindMemoryPointer = (Func<Process, IntPtr>)((proc) => {
+        print("[Autosplitter] Scanning memory");
+        var target = new SigScanTarget(0, "?? 00 A3 A3 ?? ?? ?? 00 00 00 00 02 ?? ?? 00 02");
+
+        int scanOffset = 0;
+        foreach (var page in proc.MemoryPages()) {
+            var scanner = new SignatureScanner(proc, page.BaseAddress, (int)page.RegionSize);
+            if ((scanOffset = (int)scanner.Scan(target)) != 0) {
+                break;
+            }
+        }
+
+        if (scanOffset != IntPtr.Zero.ToInt32()) {
+            return new IntPtr(scanOffset);
+        }
+
+        return IntPtr.Zero;
+    });
 
     vars.GetWatcherList = (Func<IntPtr, MemoryWatcherList>)((wramAddr) => {
         var iwramAddr = wramAddr + 0x40000;
@@ -88,14 +105,15 @@ startup {
     });}
 
 init {
-    if (current.wramAddr == IntPtr.Zero.ToInt32()) {
+    var wramAddr = vars.FindMemoryPointer(game);
+    if (wramAddr == IntPtr.Zero) {
         throw new Exception("Could not find emulated game memory");
     }
 
     refreshRate = 200/3.0;
     vars.splits = new Dictionary<string, Func<bool>>();
-    vars.watchers = vars.GetWatcherList(new IntPtr(current.wramAddr));
-    print("[Autosplitter] WRAM Pointer: " + current.wramAddr.ToString("X8"));
+    vars.watchers = vars.GetWatcherList(wramAddr);
+    print("[Autosplitter] WRAM Pointer: " + wramAddr.ToString("X8"));
 }
 
 update {
