@@ -30,7 +30,7 @@ startup {
     refreshRate = 0.5;
 
     vars.timer_OnStart = (EventHandler)((s, e) => {
-        vars.splits = vars.GetSplitList();
+        vars.splits = vars.GetSplits();
     });
     timer.OnStart += vars.timer_OnStart;
 
@@ -53,7 +53,7 @@ startup {
         return IntPtr.Zero;
     });
 
-    vars.GetWatcherList = (Func<IntPtr, MemoryWatcherList>)((wramAddr) => {
+    vars.GetWatchers = (Func<IntPtr, MemoryWatcherList>)((wramAddr) => {
         var iwramAddr = wramAddr + 0x40000;
         Func<int, DeepPointer> CreateSaveBlockPointer = (offset) => {
            return new DeepPointer(iwramAddr + 0x5008, DeepPointer.DerefType.Bit32, wramAddr.ToInt32() - 0x2000000 + offset);
@@ -73,34 +73,33 @@ startup {
         };
     });
 
-    vars.GetSplitList = (Func<Dictionary<string, Func<bool>>>)(() => {
-        Func<string, bool> StateChanged = (name) => vars.watchers[name].Changed;
+    vars.GetSplits = (Func<Dictionary<string, Func<bool>>>)(() => {
         Func<string, int, bool> HasFlag = (name, index) => {
             var watcher = vars.watchers[name];
             var flag = 0x1UL << index;
-            return (watcher.Current & flag) == flag;
+            return watcher.Changed && ((watcher.Current & flag) == flag);
         };
 
         return new Dictionary<string, Func<bool>> {
-            { "squirtle", () => StateChanged("storyFlags") && HasFlag("storyFlags", 0x28) },
-            { "brock", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x0) },
-            { "misty", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x1) },
-            { "ssticket", () => StateChanged("storyFlags") && HasFlag("storyFlags", 0x4) },
-            { "surge", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x2) },
-            { "lavender", () => StateChanged("location") && vars.watchers["location"].Current == 0x403 && vars.watchers["items"].Current.Contains("\u0055") },
-            { "scope", () => StateChanged("keyItems") && vars.watchers["keyItems"].Current.Contains("\u0067\u0001") },
-            { "flute", () => StateChanged("storyFlags") && HasFlag("storyFlags", 0xD) },
-            { "koga", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x4) },
-            { "blaine", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x6) },
-            { "erika", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x3) },
-            { "sabrina", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x5) },
-            { "giovanni3", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x7) },
-            { "lorelei", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x8) },
-            { "bruno", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0x9) },
-            { "agatha", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0xA) },
-            { "lance", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0xB) },
-            { "champion", () => StateChanged("bossFlags") && HasFlag("bossFlags", 0xC) },
-            { "hallOfFame", () => StateChanged("specialFlags") && HasFlag("specialFlags", 0x0) },
+            { "squirtle", () => HasFlag("storyFlags", 0x28) },
+            { "brock", () => HasFlag("bossFlags", 0x0) },
+            { "misty", () => HasFlag("bossFlags", 0x1) },
+            { "ssticket", () => HasFlag("storyFlags", 0x4) },
+            { "surge", () => HasFlag("bossFlags", 0x2) },
+            { "lavender", () => vars.watchers["location"].Current == 0x403 && vars.watchers["items"].Current.Contains("\u0055") },
+            { "scope", () => vars.watchers["keyItems"].Current.Contains("\u0067\u0001") },
+            { "flute", () => HasFlag("storyFlags", 0xD) },
+            { "koga", () => HasFlag("bossFlags", 0x4) },
+            { "blaine", () => HasFlag("bossFlags", 0x6) },
+            { "erika", () => HasFlag("bossFlags", 0x3) },
+            { "sabrina", () => HasFlag("bossFlags", 0x5) },
+            { "giovanni3", () => HasFlag("bossFlags", 0x7) },
+            { "lorelei", () => HasFlag("bossFlags", 0x8) },
+            { "bruno", () => HasFlag("bossFlags", 0x9) },
+            { "agatha", () => HasFlag("bossFlags", 0xA) },
+            { "lance", () => HasFlag("bossFlags", 0xB) },
+            { "champion", () => HasFlag("bossFlags", 0xC) },
+            { "hallOfFame", () => HasFlag("specialFlags", 0x0) },
         };
     });}
 
@@ -112,7 +111,7 @@ init {
 
     refreshRate = 200/3.0;
     vars.splits = new Dictionary<string, Func<bool>>();
-    vars.watchers = vars.GetWatcherList(wramAddr);
+    vars.watchers = vars.GetWatchers(wramAddr);
     print("[Autosplitter] WRAM Pointer: " + wramAddr.ToString("X8"));
 }
 
@@ -130,13 +129,13 @@ reset {
 
 split {
     var taskPtr = vars.watchers["taskPtr"].Current;
-    if (taskPtr == 0x80775F9 || taskPtr == 0x8078C39) {
-        // Do not split in the intro or in the main menu.
+    if (taskPtr == 0x80775F9 || taskPtr == 0x8078C39 || vars.watchers["vblankCallback"].Current == IntPtr.Zero.ToInt32()) {
+        // Do not split in the intro, in the main menu or when the save block is being moved.
         return false;
     }
 
     foreach (var _split in vars.splits) {
-        if (settings[_split.Key] && _split.Value() && vars.watchers["vblankCallback"].Current != IntPtr.Zero.ToInt32()) {
+        if (settings[_split.Key] && _split.Value()) {
             print("[Autosplitter] Split: " + _split.Key);
             print("StoryFlags: " + vars.watchers["storyFlags"].Current.ToString("X"));
             print("BossFlags: " + vars.watchers["bossFlags"].Current.ToString("X"));
