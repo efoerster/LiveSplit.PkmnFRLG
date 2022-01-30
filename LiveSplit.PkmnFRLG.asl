@@ -55,21 +55,23 @@ startup {
 
     vars.GetWatchers = (Func<IntPtr, MemoryWatcherList>)((wramAddr) => {
         var iwramAddr = wramAddr + 0x40000;
-        Func<int, DeepPointer> CreateSaveBlockPointer = (offset) => {
-           return new DeepPointer(iwramAddr + 0x5008, DeepPointer.DerefType.Bit32, wramAddr.ToInt32() - 0x2000000 + offset);
+        Func<int, int, DeepPointer> CreateSaveBlockPointer = (number, offset) => {
+            var saveBlockPtrAddr = number == 1 ? 0x5008 : 0x500C;
+            return new DeepPointer(iwramAddr + saveBlockPtrAddr, DeepPointer.DerefType.Bit32, wramAddr.ToInt32() - 0x2000000 + offset);
         };
 
         return new MemoryWatcherList {
             new MemoryWatcher<uint>(iwramAddr + 0x30F0 + 0xC) { Name = "vblankCallback" },
             new MemoryWatcher<uint>(iwramAddr + 0x5090) { Name = "taskPtr" },
             new MemoryWatcher<ushort>(iwramAddr + 0x509A) { Name = "cursorPos" },
-            new MemoryWatcher<ushort>(CreateSaveBlockPointer(0x4)) { Name = "location" },
-            new MemoryWatcher<ulong>(CreateSaveBlockPointer(0xEE0 + 0x46)) { Name = "storyFlags" },
-            new MemoryWatcher<ushort>(CreateSaveBlockPointer(0xEE0 + 0x96)) { Name = "bossFlags" },
-            new StringWatcher(CreateSaveBlockPointer(0x310), ReadStringType.AutoDetect, 6 * 42) { Name = "items" },
-            new StringWatcher(CreateSaveBlockPointer(0x3B8), ReadStringType.AutoDetect, 6 * 30) { Name = "keyItems" },
+            new MemoryWatcher<ushort>(iwramAddr + 0xE7C) { Name = "playTimeCounterState" },
+            new MemoryWatcher<ushort>(CreateSaveBlockPointer(1, 0x4)) { Name = "location" },
+            new MemoryWatcher<ulong>(CreateSaveBlockPointer(1, 0xEE0 + 0x46)) { Name = "storyFlags" },
+            new MemoryWatcher<ushort>(CreateSaveBlockPointer(1, 0xEE0 + 0x96)) { Name = "bossFlags" },
+            new StringWatcher(CreateSaveBlockPointer(1, 0x310), ReadStringType.AutoDetect, 6 * 42) { Name = "items" },
+            new StringWatcher(CreateSaveBlockPointer(1, 0x3B8), ReadStringType.AutoDetect, 6 * 30) { Name = "keyItems" },
+            new MemoryWatcher<ushort>(CreateSaveBlockPointer(2, 0xA)) { Name = "playerTrainerId" },
             new MemoryWatcher<byte>(wramAddr + 0x370E0) { Name = "specialFlags" },
-            new MemoryWatcher<byte>(wramAddr + 0x31DE0) { Name = "test" },
         };
     });
 
@@ -120,6 +122,7 @@ update {
 }
 
 start {
+    vars.trainerId = null;
     return vars.watchers["taskPtr"].Current == 0x800CAA9 && vars.watchers["cursorPos"].Current == 1;
 }
 
@@ -128,17 +131,24 @@ reset {
 }
 
 split {
-    var taskPtr = vars.watchers["taskPtr"].Current;
-    if (taskPtr == 0x80775F9 || taskPtr == 0x8078C39 || vars.watchers["vblankCallback"].Current == IntPtr.Zero.ToInt32()) {
-        // Do not split in the intro, in the main menu or when the save block is being moved.
+    var playerTrainerId = vars.watchers["playerTrainerId"].Current;
+    if (vars.trainerId == null && vars.watchers["playTimeCounterState"].Current == 1) {
+        vars.trainerId = playerTrainerId;
+        print("[Autosplitter] New game started with trainer id: " + vars.trainerId);
+    }
+
+    var vblankCallback = vars.watchers["vblankCallback"].Current;
+    if (vars.trainerId == null || vars.trainerId != playerTrainerId || vblankCallback == IntPtr.Zero.ToInt32()) {
+        // Do not split until the trainer id is determined or when the save block is being moved.
         return false;
     }
 
     foreach (var _split in vars.splits) {
         if (settings[_split.Key] && _split.Value()) {
             print("[Autosplitter] Split: " + _split.Key);
-            print("StoryFlags: " + vars.watchers["storyFlags"].Current.ToString("X"));
-            print("BossFlags: " + vars.watchers["bossFlags"].Current.ToString("X"));
+            print("[Autosplitter] StoryFlags: " + vars.watchers["storyFlags"].Current.ToString("X"));
+            print("[Autosplitter] BossFlags: " + vars.watchers["bossFlags"].Current.ToString("X"));
+            print("[Autosplitter] SpecialFlags: " + vars.watchers["specialFlags"].Current.ToString("X"));
 
             vars.splits.Remove(_split.Key);
             return true;
