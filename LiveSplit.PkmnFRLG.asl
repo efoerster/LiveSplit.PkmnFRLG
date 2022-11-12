@@ -34,44 +34,46 @@ startup {
     });
     timer.OnStart += vars.timer_OnStart;
 
-    vars.FindMemoryPointer = (Func<Process, IntPtr>)((proc) => {
+    vars.FindWorkingRamAddress = (Func<Process, IntPtr>)((process) => {
         print("[Autosplitter] Scanning memory");
         var target = new SigScanTarget(0, "?? 00 A3 A3 ?? ?? ?? 00 00 00 00 02 ?? ?? 00 02");
 
-        int scanOffset = 0;
-        foreach (var page in proc.MemoryPages()) {
-            var scanner = new SignatureScanner(proc, page.BaseAddress, (int)page.RegionSize);
-            if ((scanOffset = (int)scanner.Scan(target)) != 0) {
+        var address = IntPtr.Zero;
+        foreach (var page in process.MemoryPages()) {
+            var scanner = new SignatureScanner(process, page.BaseAddress, (int)page.RegionSize);
+            address = scanner.Scan(target);
+
+            if (address != IntPtr.Zero) {
                 break;
             }
         }
 
-        if (scanOffset != IntPtr.Zero.ToInt32()) {
-            return new IntPtr(scanOffset);
-        }
-
-        return IntPtr.Zero;
+        return address;
     });
 
-    vars.GetWatchers = (Func<IntPtr, MemoryWatcherList>)((wramAddr) => {
-        var iwramAddr = wramAddr + 0x40000;
-        Func<int, int, DeepPointer> CreateSaveBlockPointer = (number, offset) => {
-            var saveBlockPtrAddr = number == 1 ? 0x5008 : 0x500C;
-            return new DeepPointer(iwramAddr + saveBlockPtrAddr, DeepPointer.DerefType.Bit32, wramAddr.ToInt32() - 0x2000000 + offset);
+    vars.GetWatchers = (Func<Process, MemoryWatcherList>)((process) => {
+        Func<int, IntPtr> GetSaveBlockAddress = (pointerOffset) => {
+            var watcher = new MemoryWatcher<uint>(vars.internalWorkingRamAddress + pointerOffset);
+            watcher.Update(process);
+            
+            return new IntPtr(watcher.Current - 0x2000000 + vars.workingRamAddress.ToInt64());
         };
 
+        var saveBlock1Address = GetSaveBlockAddress(0x5008);
+        var saveBlock2Address = GetSaveBlockAddress(0x500C);
+
         return new MemoryWatcherList {
-            new MemoryWatcher<uint>(iwramAddr + 0x30F0 + 0xC) { Name = "vblankCallback" },
-            new MemoryWatcher<uint>(iwramAddr + 0x5090) { Name = "taskPtr" },
-            new MemoryWatcher<ushort>(iwramAddr + 0x509A) { Name = "cursorPos" },
-            new MemoryWatcher<ushort>(iwramAddr + 0xE7C) { Name = "playTimeCounterState" },
-            new MemoryWatcher<ushort>(CreateSaveBlockPointer(1, 0x4)) { Name = "location" },
-            new MemoryWatcher<ulong>(CreateSaveBlockPointer(1, 0xEE0 + 0x46)) { Name = "storyFlags" },
-            new MemoryWatcher<ushort>(CreateSaveBlockPointer(1, 0xEE0 + 0x96)) { Name = "bossFlags" },
-            new StringWatcher(CreateSaveBlockPointer(1, 0x310), ReadStringType.AutoDetect, 6 * 42) { Name = "items" },
-            new StringWatcher(CreateSaveBlockPointer(1, 0x3B8), ReadStringType.AutoDetect, 6 * 30) { Name = "keyItems" },
-            new MemoryWatcher<ushort>(CreateSaveBlockPointer(2, 0xA)) { Name = "playerTrainerId" },
-            new MemoryWatcher<byte>(wramAddr + 0x370E0) { Name = "specialFlags" },
+            new MemoryWatcher<uint>(vars.internalWorkingRamAddress + 0x30F0 + 0xC) { Name = "vblankCallback" },
+            new MemoryWatcher<uint>(vars.internalWorkingRamAddress + 0x5090) { Name = "taskPtr" },
+            new MemoryWatcher<ushort>(vars.internalWorkingRamAddress + 0x509A) { Name = "cursorPos" },
+            new MemoryWatcher<ushort>(vars.internalWorkingRamAddress + 0xE7C) { Name = "playTimeCounterState" },
+            new MemoryWatcher<ushort>(saveBlock1Address + 0x4) { Name = "location" },
+            new MemoryWatcher<ulong>(saveBlock1Address + 0xEE0 + 0x46) { Name = "storyFlags" },
+            new MemoryWatcher<ushort>(saveBlock1Address + 0xEE0 + 0x96) { Name = "bossFlags" },
+            new StringWatcher(saveBlock1Address + 0x310, ReadStringType.AutoDetect, 6 * 42) { Name = "items" },
+            new StringWatcher(saveBlock1Address + 0x3B8, ReadStringType.AutoDetect, 6 * 30) { Name = "keyItems" },
+            new MemoryWatcher<ushort>(saveBlock2Address + 0xA) { Name = "playerTrainerId" },
+            new MemoryWatcher<byte>(vars.workingRamAddress + 0x370E0) { Name = "specialFlags" }
         };
     });
 
@@ -79,7 +81,7 @@ startup {
         Func<string, int, bool> HasFlag = (name, index) => {
             var watcher = vars.watchers[name];
             var flag = 0x1UL << index;
-            return watcher.Changed && ((watcher.Current & flag) == flag);
+            return (watcher.Current & flag) == flag;
         };
 
         return new Dictionary<string, Func<bool>> {
@@ -106,18 +108,21 @@ startup {
     });}
 
 init {
-    var wramAddr = vars.FindMemoryPointer(game);
-    if (wramAddr == IntPtr.Zero) {
-        throw new Exception("Could not find emulated game memory");
+    vars.workingRamAddress = vars.FindWorkingRamAddress(game);
+    if (vars.workingRamAddress == IntPtr.Zero) {
+        throw new Exception("Could not find EWRAM address");
     }
+
+    vars.internalWorkingRamAddress = vars.workingRamAddress + 0x40000;
+    print("[Autosplitter] Found EWRAM address: " + vars.workingRamAddress.ToString("X8"));
 
     refreshRate = 200/3.0;
     vars.splits = new Dictionary<string, Func<bool>>();
-    vars.watchers = vars.GetWatchers(wramAddr);
-    print("[Autosplitter] WRAM Pointer: " + wramAddr.ToString("X8"));
+    vars.watchers = vars.GetWatchers(game);
 }
 
 update {
+    vars.watchers = vars.GetWatchers(game);
     vars.watchers.UpdateAll(game);
 }
 
